@@ -18,17 +18,15 @@ if sys.platform == "win32":
 
 load_dotenv()
 
-# ── Credentials ───────────────────────────────────────────────────────────────
+# ── Credentials ──────────────────────────────────────────────────────────────
 SPOTIFY_CLIENT_ID     = os.getenv("SPOTIFY_CLIENT_ID", "")
 SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET", "")
 SPOTIFY_REDIRECT_URI  = os.getenv("SPOTIFY_REDIRECT_URI", "http://localhost:8888/callback")
 YOUTUBE_API_KEY       = os.getenv("YOUTUBE_API_KEY", "")
-WEATHERAPI_KEY        = os.getenv("WEATHERAPI_KEY", "4eb9fb2c6e0a49ee8e154255261505")
+WEATHERAPI_KEY        = os.getenv("WEATHERAPI_KEY", "")
+MINECRAFT_PATH        = os.getenv("MINECRAFT_PATH", "")
 
-# ── Config ────────────────────────────────────────────────────────────────────
-MINECRAFT_PATH = r"C:\Users\alex.strydom\OneDrive - St Philip's College\Apps\Spearpvp\Spearpvp.exe"
-
-# ── TTS (edge-tts) ────────────────────────────────────────────────────────────
+# ── TTS (edge-tts) ─────────────────────────────────────────────────────────────
 try:
     import edge_tts
     import pygame
@@ -40,6 +38,16 @@ except Exception as e:
 
 JARVIS_VOICE = "en-GB-RyanNeural"
 
+# Global callback for UI updates during speech
+_on_speak_start = None
+_on_speak_end = None
+
+def set_speech_callbacks(on_start, on_end):
+    """Set callbacks for speech events (used by GUI)"""
+    global _on_speak_start, _on_speak_end
+    _on_speak_start = on_start
+    _on_speak_end = on_end
+
 async def _speak_async(text: str):
     with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as f:
         tmp_path = f.name
@@ -48,9 +56,18 @@ async def _speak_async(text: str):
     return tmp_path
 
 def speak(text: str):
+    """Speak text using edge-tts and trigger UI animation"""
     print(f"🤖 Jarvis: {text}", flush=True)
+    
+    # Trigger UI animation start
+    if _on_speak_start:
+        _on_speak_start()
+    
     if not TTS_AVAILABLE:
+        if _on_speak_end:
+            _on_speak_end()
         return
+    
     try:
         tmp_path = asyncio.run(_speak_async(text))
         pygame.mixer.music.load(tmp_path)
@@ -61,6 +78,10 @@ def speak(text: str):
         os.remove(tmp_path)
     except Exception as e:
         print(f"[TTS: {e}]")
+    finally:
+        # Trigger UI animation end
+        if _on_speak_end:
+            _on_speak_end()
 
 # ── Speech recognition ────────────────────────────────────────────────────────
 try:
@@ -114,7 +135,7 @@ def contains_wake_word(text: str) -> tuple[bool, str]:
             return True, remainder
     return False, ""
 
-# ── Spotify (Premium) ─────────────────────────────────────────────────────────
+# ── Spotify (Premium) ────────────────────────────────────────────────────────
 _sp = None
 
 def _get_spotify():
@@ -128,7 +149,7 @@ def _get_spotify():
         from spotipy.oauth2 import SpotifyPKCE
         auth_manager = SpotifyPKCE(
             client_id=SPOTIFY_CLIENT_ID,
-            redirect_uri="http://localhost:8888/callback",
+            redirect_uri=SPOTIFY_REDIRECT_URI,
             scope="user-modify-playback-state user-read-playback-state playlist-read-private",
             open_browser=True,
         )
@@ -279,9 +300,9 @@ def play_youtube(query: str):
         except Exception as e:
             print(f"[YouTube API: {e}]")
     speak(f"Searching YouTube for {query}.")
-    webbrowser.open(f"https://www.youtube.com/results?search_query={query.replace(' ', '+')}")
+    webbrowser.open(f"https://www.youtube.com/results?search_query={query.replace(' ', '+')}"))
 
-# ── Time & Date ───────────────────────────────────────────────────────────────
+# ── Time & Date ──────────────────────────────────────────────────────────────
 def tell_time():
     now = datetime.now()
     t = now.strftime("%I:%M %p").lstrip("0")
@@ -292,7 +313,7 @@ def tell_date():
     d = now.strftime("%A, %B %d, %Y")
     speak(f"Today is {d}.")
 
-# ── Weather ───────────────────────────────────────────────────────────────────
+# ── Weather ──────────────────────────────────────────────────────────────────
 def _get_location() -> str:
     try:
         resp = requests.get("https://ipapi.co/json/", timeout=5)
@@ -326,11 +347,10 @@ def tell_weather(city: str = ""):
         speak("I couldn't retrieve the weather right now.")
         print(f"[Weather: {e}]")
 
-# ── Minecraft ─────────────────────────────────────────────────────────────────
+# ── Minecraft ────────────────────────────────────────────────────────────────
 def launch_minecraft():
-    if not os.path.exists(MINECRAFT_PATH):
-        speak("I couldn't find the Minecraft launcher. Please check the path in my settings.")
-        print(f"[Minecraft] Path not found: {MINECRAFT_PATH}")
+    if not MINECRAFT_PATH or not os.path.exists(MINECRAFT_PATH):
+        speak("Minecraft path not configured or not found. Please set MINECRAFT_PATH in your .env file.")
         return
     try:
         subprocess.Popen([MINECRAFT_PATH])
@@ -390,7 +410,7 @@ def _parse_spotify_command(cmd: str) -> bool:
     return False
 
 
-# ── Command handler ───────────────────────────────────────────────────────────
+# ── Command handler ────────────────────────────────────────────────────────────
 def process_command(command: str) -> bool:
     """Returns False to exit, True to keep running."""
     if not command:
@@ -464,7 +484,7 @@ def process_command(command: str) -> bool:
     # ── Search
     elif cmd.startswith("search ") or cmd.startswith("google "):
         query = cmd.split(" ", 1)[1].strip()
-        webbrowser.open(f"https://www.google.com/search?q={query.replace(' ', '+')}")
+        webbrowser.open(f"https://www.google.com/search?q={query.replace(' ', '+')}"))
         speak(f"Searching for {query}.")
 
     # ── Help
@@ -484,7 +504,7 @@ def process_command(command: str) -> bool:
 
     return True
 
-# ── Main loop ─────────────────────────────────────────────────────────────────
+# ── Main loop (CLI mode) ───────────────────────────────────────────────────────
 def main():
     print("\n" + "=" * 55)
     print("🤖  JARVIS — Voice Assistant")
@@ -495,7 +515,10 @@ def main():
     print(f"  TTS      : {'✅ enabled' if TTS_AVAILABLE else '❌ disabled'}")
     print(f"  STT      : {'✅ enabled' if SR_AVAILABLE else '❌ disabled'}")
     print(f"  Voice    : {JARVIS_VOICE}")
-    print(f"  Minecraft: {MINECRAFT_PATH}")
+    if MINECRAFT_PATH:
+        print(f"  Minecraft: ✅ configured")
+    else:
+        print(f"  Minecraft: ⚠️  not set")
     print("=" * 55)
     print("\nSay 'Hey Jarvis' to activate. Say 'stop' to quit.\n")
 

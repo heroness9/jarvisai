@@ -1,29 +1,26 @@
 FROM python:3.11-slim
 
-# System dependencies for audio, TTS, and speech recognition
-RUN apt-get update && apt-get install -y \
-    portaudio19-dev \
-    python3-pyaudio \
-    alsa-utils \
-    libasound2-dev \
-    libsndfile1 \
-    ffmpeg \
-    espeak-ng \
-    libespeak-ng1 \
-    pulseaudio \
-    pulseaudio-utils \
-    && rm -rf /var/lib/apt/lists/*
-
 WORKDIR /app
 
+# Install system dependencies for audio
+RUN apt-get update && apt-get install -y \
+    portaudio19-dev \
+    alsa-utils \
+    pulseaudio \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements and install Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Copy application files
 COPY jarvis.py .
-COPY .env* ./
+COPY test_voice.py .
+COPY .env .env 2>/dev/null || true
 
-# PulseAudio socket (for audio passthrough from Windows host via PulseAudio)
-ENV PULSE_SERVER=tcp:host.docker.internal:4713
-ENV PYTHONUNBUFFERED=1
+# Create non-root user
+RUN useradd -m -u 1000 jarvis && chown -R jarvis:jarvis /app
+USER jarvis
 
+# Run the CLI version (GUI won't work in container)
 CMD ["python", "jarvis.py"]

@@ -1,291 +1,246 @@
-
-import sys
+import tkinter as tk
+from tkinter import ttk
 import threading
-import time
-import queue
-from datetime import datetime
+import math
+import jarvis
 
-import customtkinter as ctk
-
-from jarvis import (
-    speak,
-    listen,
-    contains_wake_word,
-    process_command,
-    TTS_AVAILABLE,
-    SR_AVAILABLE,
-    SPOTIFY_CLIENT_ID,
-    YOUTUBE_API_KEY,
-)
-
-#Theme-------------------------------
-ctk.set_appearance_mode("dark")
-ctk.set_default_color_theme("blue")
-
-COLORS = {
-    "bg":        "#0a0a0f",
-    "panel":     "#10101a",
-    "border":    "#1e1e32",
-    "accent":    "#00c8ff",
-    "accent2":   "#0077ff",
-    "user_msg":  "#1a2a3a",
-    "bot_msg":   "#0d1a2a",
-    "text":      "#e8f4ff",
-    "subtext":   "#6a7f9a",
-    "danger":    "#ff4466",
-    "success":   "#00e5a0",
-    "warning":   "#ffaa00",
-}
-#------------------------------end of theme--------------------
-
-class JarvisApp(ctk.CTk):
-    def __init__(self):
-        super().__init__()
-
-        self.title("J.A.R.V.I.S")
-        self.geometry("860x640")
-        self.minsize(640, 480)
-        self.configure(fg_color=COLORS["bg"])
-
-        # Thread-safe queue for messages from background threads
-        self._msg_queue: queue.Queue = queue.Queue()
-        self._running = True
-        self._voice_active = False
-
-        self._build_ui()
-        self._poll_queue()
-
-        # Greet
-        self._add_message("jarvis", "Ready to get into business sir?.")
-        self._update_status()
-
-    # ── UI Construction ───────────────────────────────────────────────────────
-
-    def _build_ui(self):
-        # Header
-        header = ctk.CTkFrame(self, fg_color=COLORS["panel"], corner_radius=0, height=58)
-        header.pack(fill="x", side="top")
-        header.pack_propagate(False)
-
-        ctk.CTkLabel(
-            header, text="  ◈  J.A.R.V.I.S",
-            font=ctk.CTkFont(family="Courier New", size=20, weight="bold"),
-            text_color=COLORS["accent"],
-        ).pack(side="left", padx=18)
-
-        # Status pills
-        self._pill_tts = self._make_pill(header, "TTS", TTS_AVAILABLE)
-        self._pill_stt = self._make_pill(header, "STT", SR_AVAILABLE)
-        self._pill_spotify = self._make_pill(header, "Spotify", bool(SPOTIFY_CLIENT_ID))
-        self._pill_yt = self._make_pill(header, "YouTube", bool(YOUTUBE_API_KEY))
-
-        # Chat area
-        self._chat = ctk.CTkScrollableFrame(
-            self, fg_color=COLORS["bg"], corner_radius=0,
+class JarvisGUI:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("🤖 JARVIS — Voice Assistant")
+        self.root.geometry("600x700")
+        self.root.resizable(False, False)
+        
+        # Configure dark theme
+        self.root.configure(bg="#0a0e27")
+        self.bg_color = "#0a0e27"
+        self.accent_color = "#00d9ff"
+        self.secondary_color = "#1a1f3a"
+        
+        # Set up styles
+        self.setup_styles()
+        
+        # Animation state
+        self.is_speaking = False
+        self.animation_frame = 0
+        self.animation_speed = 0.15
+        
+        # Create UI
+        self.create_widgets()
+        
+        # Set speech callbacks
+        jarvis.set_speech_callbacks(self.on_speak_start, self.on_speak_end)
+        
+        # Start the main loop in a separate thread
+        self.running = True
+        self.jarvis_thread = threading.Thread(target=self.run_jarvis, daemon=True)
+        self.jarvis_thread.start()
+    
+    def setup_styles(self):
+        """Configure ttk styles"""
+        style = ttk.Style()
+        style.theme_use('clam')
+        
+        # Configure colors
+        style.configure('TFrame', background=self.bg_color)
+        style.configure('TLabel', background=self.bg_color, foreground="#ffffff")
+        style.configure('Title.TLabel', background=self.bg_color, foreground=self.accent_color, 
+                       font=('Helvetica', 24, 'bold'))
+        style.configure('Status.TLabel', background=self.bg_color, foreground="#888888",
+                       font=('Helvetica', 12))
+    
+    def create_widgets(self):
+        """Create GUI widgets"""
+        # Main container
+        main_frame = ttk.Frame(self.root)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+        
+        # Title
+        title_label = ttk.Label(main_frame, text="🤖 JARVIS", style='Title.TLabel')
+        title_label.pack(pady=(0, 10))
+        
+        subtitle_label = ttk.Label(main_frame, text="Voice Activated AI Assistant", 
+                                  style='Status.TLabel')
+        subtitle_label.pack(pady=(0, 30))
+        
+        # Canvas for animated ball
+        self.canvas = tk.Canvas(main_frame, width=300, height=300, 
+                               bg=self.secondary_color, highlightthickness=0)
+        self.canvas.pack(pady=20)
+        
+        # Draw static background circle
+        self.draw_background_circle()
+        
+        # Status text
+        status_frame = ttk.Frame(main_frame)
+        status_frame.pack(fill=tk.X, pady=20)
+        
+        self.status_label = ttk.Label(status_frame, text="🎤 Listening for 'Hey Jarvis'...",
+                                     style='Status.TLabel')
+        self.status_label.pack()
+        
+        # Info panel
+        info_frame = ttk.Frame(main_frame)
+        info_frame.pack(fill=tk.X, pady=10)
+        
+        info_text = (
+            "Say 'Hey Jarvis' or 'OK Jarvis' to activate\n"
+            "• Play music on Spotify\n"
+            "• Watch videos on YouTube\n"
+            "• Check weather, time, date\n"
+            "• Search the web\n\n"
+            "Say 'Stop' or 'Exit' to quit"
         )
-        self._chat.pack(fill="both", expand=True, padx=0, pady=0)
-
-        # Input bar
-        bar = ctk.CTkFrame(self, fg_color=COLORS["panel"], corner_radius=0, height=62)
-        bar.pack(fill="x", side="bottom")
-        bar.pack_propagate(False)
-
-        self._entry = ctk.CTkEntry(
-            bar,
-            placeholder_text="Type a command…",
-            font=ctk.CTkFont(family="Courier New", size=14),
-            fg_color=COLORS["bg"],
-            border_color=COLORS["border"],
-            text_color=COLORS["text"],
-            height=38,
-            corner_radius=8,
-        )
-        self._entry.pack(side="left", fill="x", expand=True, padx=(14, 8), pady=12)
-        self._entry.bind("<Return>", lambda e: self._on_send())
-
-        self._btn_send = ctk.CTkButton(
-            bar, text="Send", width=72, height=38,
-            font=ctk.CTkFont(family="Courier New", size=13, weight="bold"),
-            fg_color=COLORS["accent2"], hover_color=COLORS["accent"],
-            text_color="#ffffff", corner_radius=8,
-            command=self._on_send,
-        )
-        self._btn_send.pack(side="left", pady=12)
-
-        self._btn_mic = ctk.CTkButton(
-            bar, text="🎤", width=46, height=38,
-            font=ctk.CTkFont(size=18),
-            fg_color=COLORS["border"], hover_color="#2a2a44",
-            corner_radius=8,
-            command=self._on_voice,
-        )
-        self._btn_mic.pack(side="left", padx=(6, 14), pady=12)
-
-    def _make_pill(self, parent, label: str, ok: bool) -> ctk.CTkLabel:
-        color = COLORS["success"] if ok else COLORS["danger"]
-        dot = "●"
-        pill = ctk.CTkLabel(
-            parent,
-            text=f"{dot} {label}",
-            font=ctk.CTkFont(family="Courier New", size=11),
-            text_color=color,
-            fg_color=COLORS["border"],
-            corner_radius=10,
-            padx=8, pady=2,
-        )
-        pill.pack(side="right", padx=6)
-        return pill
-
-    # ── Message Rendering ─────────────────────────────────────────────────────
-
-    def _add_message(self, sender: str, text: str):
-        """Add a chat bubble. Must be called from main thread."""
-        is_user = (sender == "user")
-        now = datetime.now().strftime("%H:%M")
-
-        outer = ctk.CTkFrame(self._chat, fg_color="transparent")
-        outer.pack(fill="x", padx=16, pady=(4, 4))
-
-        bubble_color = COLORS["user_msg"] if is_user else COLORS["bot_msg"]
-        border_color = COLORS["accent2"] if is_user else COLORS["accent"]
-        anchor = "e" if is_user else "w"
-
-        bubble = ctk.CTkFrame(
-            outer,
-            fg_color=bubble_color,
-            border_color=border_color,
-            border_width=1,
-            corner_radius=12,
-        )
-        bubble.pack(anchor=anchor, padx=4)
-
-        # Label row
-        name = "You" if is_user else "Jarvis"
-        name_color = COLORS["accent2"] if is_user else COLORS["accent"]
-
-        top = ctk.CTkFrame(bubble, fg_color="transparent")
-        top.pack(fill="x", padx=10, pady=(6, 0))
-        ctk.CTkLabel(top, text=name,
-                     font=ctk.CTkFont(family="Courier New", size=11, weight="bold"),
-                     text_color=name_color).pack(side="left")
-        ctk.CTkLabel(top, text=now,
-                     font=ctk.CTkFont(family="Courier New", size=10),
-                     text_color=COLORS["subtext"]).pack(side="right")
-
-        ctk.CTkLabel(
-            bubble, text=text,
-            font=ctk.CTkFont(family="Courier New", size=13),
-            text_color=COLORS["text"],
-            wraplength=480,
-            justify="left",
-        ).pack(padx=12, pady=(2, 10), anchor="w")
-
-        # Auto-scroll
-        self.after(50, lambda: self._chat._parent_canvas.yview_moveto(1.0))
-
-    # ── Event Handlers ────────────────────────────────────────────────────────
-
-    def _on_send(self):
-        text = self._entry.get().strip()
-        if not text:
+        
+        info_label = tk.Label(info_frame, text=info_text, 
+                             bg=self.secondary_color, fg="#888888",
+                             font=('Helvetica', 10), justify=tk.LEFT,
+                             padx=15, pady=15)
+        info_label.pack(fill=tk.BOTH, expand=True)
+        info_label.config(relief=tk.RAISED, bd=1)
+        
+        # Start animation loop
+        self.animate_ball()
+    
+    def draw_background_circle(self):
+        """Draw the background circle for the ball"""
+        self.canvas.create_oval(50, 50, 250, 250, outline=self.accent_color, width=2)
+        self.canvas.create_text(150, 280, text="JARVIS", fill=self.accent_color,
+                               font=('Helvetica', 14, 'bold'))
+    
+    def draw_ball(self, x, y, size=40, color=None):
+        """Draw the animated Jarvis ball"""
+        if color is None:
+            color = self.accent_color if not self.is_speaking else "#ff00ff"
+        
+        # Draw outer glow
+        glow_size = size * 1.3
+        self.canvas.create_oval(x - glow_size//2, y - glow_size//2,
+                              x + glow_size//2, y + glow_size//2,
+                              fill="", outline=color, width=1)
+        
+        # Draw main ball
+        self.canvas.create_oval(x - size//2, y - size//2,
+                              x + size//2, y + size//2,
+                              fill=color, outline=color)
+        
+        # Draw inner shine
+        shine_size = size // 3
+        self.canvas.create_oval(x - shine_size//2 - 5, y - shine_size//2 - 5,
+                              x + shine_size//2 - 5, y + shine_size//2 - 5,
+                              fill="white", outline="")
+    
+    def animate_ball(self):
+        """Animate the ball movement"""
+        if not self.running:
             return
-        self._entry.delete(0, "end")
-        self._add_message("user", text)
-        threading.Thread(target=self._run_command, args=(text,), daemon=True).start()
-
-    def _on_voice(self):
-        if self._voice_active:
-            return
-        self._voice_active = True
-        self._btn_mic.configure(fg_color=COLORS["accent"], text="⏹")
-        threading.Thread(target=self._voice_loop_once, daemon=True).start()
-
-    def _voice_loop_once(self):
-        """Listen for one command (with optional wake-word detection)."""
-        self._msg_queue.put(("status", "🎤 Listening for wake word…"))
-        text = listen(timeout=10, phrase_limit=8)
-
-        if text is None:
-            self._msg_queue.put(("status", "idle"))
-            self._msg_queue.put(("mic_reset", None))
-            return
-
-        detected, command = contains_wake_word(text)
-
-        if not detected:
-            # In GUI mode, also accept direct commands without wake word
-            command = text
-
-        self._msg_queue.put(("user_msg", text))
-
-        if not command:
-            self._msg_queue.put(("status", "🎤 Listening for command…"))
-            command = listen(timeout=6, phrase_limit=8) or ""
-            if command:
-                self._msg_queue.put(("user_msg", command))
-
-        self._msg_queue.put(("status", "⚙️ Processing…"))
-        self._run_command(command)
-        self._msg_queue.put(("mic_reset", None))
-
-    def _run_command(self, command: str):
-        """Run in background thread. Monkey-patches speak() to also show in GUI."""
-        original_speak = __builtins__  # we'll patch via queue instead
-
-        # Capture speak output by wrapping it
-        import jarvis as _j
-        _original = _j.speak
-
-        def gui_speak(text):
-            _original(text)
-            self._msg_queue.put(("bot_msg", text))
-
-        _j.speak = gui_speak
+        
+        self.canvas.delete("all")
+        self.draw_background_circle()
+        
+        if self.is_speaking:
+            # Pulsing and moving animation when speaking
+            progress = (math.sin(self.animation_frame * self.animation_speed) + 1) / 2
+            
+            # Circular motion
+            angle = self.animation_frame * self.animation_speed
+            radius = 40 * progress
+            x = 150 + math.cos(angle) * radius
+            y = 150 + math.sin(angle) * radius * 0.7
+            
+            # Pulsing size
+            size = 40 + int(15 * progress)
+            
+            # Draw pulsing effect
+            for i in range(3):
+                alpha_progress = (progress - i * 0.3) % 1.0
+                if alpha_progress > 0:
+                    pulse_size = size + int(20 * (1 - alpha_progress))
+                    self.canvas.create_oval(x - pulse_size//2, y - pulse_size//2,
+                                          x + pulse_size//2, y + pulse_size//2,
+                                          outline="#ff00ff", width=1)
+            
+            self.draw_ball(int(x), int(y), size, "#ff00ff")
+        else:
+            # Gentle breathing animation when idle
+            progress = (math.sin(self.animation_frame * self.animation_speed * 0.5) + 1) / 2
+            size = 35 + int(10 * progress)
+            self.draw_ball(150, 150, size, self.accent_color)
+        
+        self.animation_frame += 1
+        self.root.after(50, self.animate_ball)
+    
+    def on_speak_start(self):
+        """Called when Jarvis starts speaking"""
+        self.is_speaking = True
+        self.status_label.config(text="🤖 Speaking...")
+        self.root.update_idletasks()
+    
+    def on_speak_end(self):
+        """Called when Jarvis stops speaking"""
+        self.is_speaking = False
+        self.status_label.config(text="🎤 Listening...")
+        self.root.update_idletasks()
+    
+    def run_jarvis(self):
+        """Run the main Jarvis loop"""
         try:
-            keep_going = process_command(command)
-            if not keep_going:
-                self._msg_queue.put(("quit", None))
-        finally:
-            _j.speak = _original
-            self._voice_active = False
-            self._msg_queue.put(("status", "idle"))
-
-    # ── Queue Polling ─────────────────────────────────────────────────────────
-
-    def _poll_queue(self):
-        try:
-            while True:
-                kind, data = self._msg_queue.get_nowait()
-                if kind == "bot_msg":
-                    self._add_message("jarvis", data)
-                elif kind == "user_msg":
-                    self._add_message("user", data)
-                elif kind == "status":
-                    self._set_status(data)
-                elif kind == "mic_reset":
-                    self._btn_mic.configure(fg_color=COLORS["border"], text="🎤")
-                elif kind == "quit":
-                    self.destroy()
-                    return
-        except queue.Empty:
-            pass
-        if self._running:
-            self.after(80, self._poll_queue)
-
-    def _set_status(self, msg: str):
-        pass  # optionally update a status bar if you add one
-
-    def _update_status(self):
-        pass
-
+            # Print startup info
+            print("\n" + "=" * 55)
+            print("🤖  JARVIS — Voice Assistant (GUI Mode)")
+            print("=" * 55)
+            print(f"  Spotify  : {'✅ configured' if jarvis.SPOTIFY_CLIENT_ID else '⚠️  not set'}")
+            print(f"  YouTube  : {'✅ configured' if jarvis.YOUTUBE_API_KEY else '⚠️  not set (search fallback)'}")
+            print(f"  Weather  : {'✅ configured' if jarvis.WEATHERAPI_KEY else '⚠️  not set'}")
+            print(f"  TTS      : {'✅ enabled' if jarvis.TTS_AVAILABLE else '❌ disabled'}")
+            print(f"  STT      : {'✅ enabled' if jarvis.SR_AVAILABLE else '❌ disabled'}")
+            print(f"  Voice    : {jarvis.JARVIS_VOICE}")
+            if jarvis.MINECRAFT_PATH:
+                print(f"  Minecraft: ✅ configured")
+            else:
+                print(f"  Minecraft: ⚠️  not set")
+            print("=" * 55 + "\n")
+            
+            jarvis.speak("Hello. I am Jarvis. Say hey Jarvis to activate.")
+            
+            while self.running:
+                text = jarvis.listen(timeout=10, phrase_limit=8)
+                if text is None:
+                    continue
+                
+                detected, command = jarvis.contains_wake_word(text)
+                if not detected:
+                    continue
+                
+                if not command:
+                    jarvis.speak("Yes?")
+                    command = jarvis.listen(timeout=6, phrase_limit=8) or ""
+                
+                if not jarvis.process_command(command):
+                    self.stop_jarvis()
+                    break
+        
+        except Exception as e:
+            print(f"[GUI Error: {e}]")
+            self.stop_jarvis()
+    
+    def stop_jarvis(self):
+        """Stop the Jarvis thread and close the app"""
+        self.running = False
+        self.root.quit()
+    
     def on_closing(self):
-        self._running = False
-        self.destroy()
+        """Handle window close"""
+        self.running = False
+        self.root.destroy()
 
 
-# ── Entry point ───────────────────────────────────────────────────────────────
+def main():
+    root = tk.Tk()
+    gui = JarvisGUI(root)
+    root.protocol("WM_DELETE_WINDOW", gui.on_closing)
+    root.mainloop()
+
 
 if __name__ == "__main__":
-    app = JarvisApp()
-    app.protocol("WM_DELETE_WINDOW", app.on_closing)
-    app.mainloop()
+    main()
