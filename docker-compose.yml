@@ -1,0 +1,27 @@
+services:
+  jarvis:
+    build: .
+    container_name: jarvis-assistant
+    restart: unless-stopped
+
+    environment:
+      SPOTIFY_CLIENT_ID: ${SPOTIFY_CLIENT_ID:-}
+      SPOTIFY_CLIENT_SECRET: ${SPOTIFY_CLIENT_SECRET:-}
+      YOUTUBE_API_KEY: ${YOUTUBE_API_KEY:-}
+      PYTHONUNBUFFERED: "1"
+      # PulseAudio for mic/speaker passthrough on Windows
+      PULSE_SERVER: tcp:host.docker.internal:4713
+
+    # Required for microphone access on Linux hosts
+    # On Windows, audio goes through PulseAudio (see README)
+    devices:
+      - /dev/snd:/dev/snd
+
+    group_add:
+      - audio
+
+    stdin_open: true
+    tty: true
+
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
